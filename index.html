@@ -38,6 +38,12 @@ label{font-size:13px;font-weight:650;display:block;margin:10px 2px 6px}input,sel
 button.smallbtn{border:0;border-radius:11px;padding:9px 11px;background:#111;color:#fff;font-weight:700}
 button.lightbtn{border:0;border-radius:11px;padding:9px 11px;background:#e5e5ea;color:#111;font-weight:700}
 .lockchoice{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+
+ .pinlock{position:fixed;inset:0;background:#f2f2f7;display:none;align-items:center;justify-content:center;z-index:100;padding:24px}
+ .pinbox{width:100%;max-width:380px;background:#fff;border-radius:26px;padding:28px 22px;box-shadow:0 10px 35px #0002;text-align:center}
+ .pinicon{font-size:42px;margin-bottom:8px}.pinbox h2{margin:0 0 7px;font-size:25px}.pinbox p{margin:0 0 18px;color:#8e8e93}
+ .pinbox input{text-align:center;letter-spacing:7px;font-size:25px;font-weight:700}
+ .pinerror{min-height:20px;color:#ff453a;font-size:14px;margin-top:9px}
 </style>
 </head>
 <body>
@@ -147,10 +153,29 @@ button.lightbtn{border:0;border-radius:11px;padding:9px 11px;background:#e5e5ea;
 <label>Data</label><input id="date" type="date">
 <button class="primary" onclick="addTx()">Salva movimento</button><button class="primary" style="background:#e5e5ea;color:#111" onclick="closeModal()">Annulla</button>
 </div></div>
+
+<div id="pinLock" class="pinlock">
+  <div class="pinbox">
+    <div class="pinicon">🔒</div>
+    <h2>Salvadanaio bloccato</h2>
+    <p>Inserisci il PIN per continuare</p>
+    <input id="unlockPin" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••">
+    <button class="primary" onclick="unlockApp()">Sblocca</button>
+    <div id="pinError" class="pinerror"></div>
+  </div>
+</div>
 <script>
 const KEY="finanze_iphone_v2";
-let db=JSON.parse(localStorage.getItem(KEY)||'{"items":[],"base":0,"goal":0,"goalName":"","subs":[],"recurring":[],"pin":"","wallet":0,"closedMonths":{}}');
-db.subs=db.subs||[];db.recurring=db.recurring||[];db.pin=db.pin||"";db.wallet=Number(db.wallet)||0;db.closedMonths=db.closedMonths||{};delete db.faceId;
+const DEFAULT_DB={items:[],base:0,goal:0,goalName:"",subs:[],recurring:[],pin:"",wallet:0,closedMonths:{}};
+let db;
+try{db=JSON.parse(localStorage.getItem(KEY)||"null")}catch{db=null}
+if(!db||typeof db!=="object")db={...DEFAULT_DB};
+db.items=Array.isArray(db.items)?db.items:[];
+db.subs=Array.isArray(db.subs)?db.subs:[];
+db.recurring=Array.isArray(db.recurring)?db.recurring:[];
+db.pin=String(db.pin||"");db.base=Number(db.base)||0;db.goal=Number(db.goal)||0;db.wallet=Number(db.wallet)||0;db.closedMonths=db.closedMonths||{};delete db.faceId;
+db.items=db.items.filter(x=>x&&x.date).map(x=>({...x,amount:Number(x.amount)||0,type:x.type==="income"?"income":"expense",desc:String(x.desc||"Movimento"),cat:String(x.cat||"Altro")}));
+db.subs=db.subs.filter(x=>x&&x.name).map(x=>({...x,amount:Number(x.amount)||0,day:Math.min(31,Math.max(1,Number(x.day)||1)),auto:!!x.auto,lastApplied:String(x.lastApplied||"")}));
 let type="income",filter="all";
 const euro=n=>new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(Number(n)||0);
 const today=()=>new Date().toISOString().slice(0,10);
@@ -201,36 +226,84 @@ function addMonthToWallet(ym){
 }
 function exportData(){const blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="backup-finanze-"+today()+".json";a.click();URL.revokeObjectURL(a.href)}
 function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.items||!Array.isArray(x.items))throw Error();db=x;db.subs=db.subs||[];db.recurring=db.recurring||[];db.closedMonths=db.closedMonths||{};db.wallet=Number(db.wallet)||0;delete db.faceId;save();alert("Backup ripristinato.");}catch{alert("Backup non valido.")}};r.readAsText(f)}
-function setPin(){const p=document.getElementById("pinInput").value;if(!/^\d{4,6}$/.test(p))return alert("Usa un PIN di 4–6 cifre.");db.pin=p;document.getElementById("pinInput").value="";save();alert("PIN attivato.")}
-function removePin(){db.pin="";save();alert("PIN disattivato.")}
+function setPin(){
+  const p=document.getElementById("pinInput").value;
+  if(!/^\d{4,6}$/.test(p))return alert("Usa un PIN di 4–6 cifre.");
+  db.pin=p;
+  document.getElementById("pinInput").value="";
+  save();
+  alert("PIN attivato. L'app verrà richiesta di sblocco alla prossima apertura.");
+}
+function removePin(){
+  db.pin="";
+  save();
+  sessionUnlocked=true;
+  hidePinLock();
+  alert("PIN disattivato.");
+}
+let sessionUnlocked=false;
+function showPinLock(){
+  if(!db.pin || sessionUnlocked)return;
+  const lock=document.getElementById("pinLock");
+  lock.style.display="flex";
+  const input=document.getElementById("unlockPin");
+  input.value="";
+  document.getElementById("pinError").textContent="";
+  setTimeout(()=>input.focus(),100);
+}
+function hidePinLock(){document.getElementById("pinLock").style.display="none";}
+function unlockApp(){
+  const entered=document.getElementById("unlockPin").value;
+  if(entered===String(db.pin)){
+    sessionUnlocked=true;
+    hidePinLock();
+    return;
+  }
+  document.getElementById("pinError").textContent="PIN non corretto.";
+  document.getElementById("unlockPin").value="";
+  document.getElementById("unlockPin").focus();
+}
+document.getElementById("unlockPin").addEventListener("keydown",e=>{if(e.key==="Enter")unlockApp();});
 function render(){
  document.getElementById("month").textContent=new Date().toLocaleDateString("it-IT",{month:"long",year:"numeric"});
  document.getElementById("goalInput").value=db.goal||"";document.getElementById("goalNameInput").value=db.goalName||"";document.getElementById("baseSavings").value=db.base||"";
  renderWallet();renderMonths();
- draw("recent",[...db.items].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5));
+ const recent=document.getElementById("recent");
+if(recent)draw("recent",[...db.items].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5));
  let all=[...db.items].sort((a,b)=>b.date.localeCompare(a.date));if(filter!=="all")all=all.filter(x=>x.type===filter);draw("allTx",all);
  let st=db.subs.reduce((a,x)=>a+x.amount,0);document.getElementById("subTotal").textContent=euro(st);
  document.getElementById("subList").innerHTML=db.subs.length?db.subs.map(x=>`<div class="tx"><div class="circle">↻</div><div class="txmain"><b>${esc(x.name)}</b><small>€ ${Number(x.amount).toFixed(2).replace(".",",")} al mese · giorno ${x.day}${x.auto?" · automatico":""}</small></div><div><b class="red">−${euro(x.amount)}</b></div><button class="delete" onclick="delSub('${x.id}')">×</button></div>`).join(""):'<div class="empty">Nessun abbonamento mensile</div>';
 
 }
-function draw(id,arr){let el=document.getElementById(id);el.innerHTML=arr.length?arr.map(x=>`<div class="tx"><div class="circle">${x.type==="income"?"↑":"↓"}</div><div class="txmain"><b>${esc(x.desc)}</b><small>${esc(x.cat)} · ${new Date(x.date+"T12:00").toLocaleDateString("it-IT")}</small></div><div class="amount ${x.type==="income"?"green":"red"}">${x.type==="income"?"+":"−"}${euro(x.amount)}</div><button class="delete" onclick="del('${x.id}')">×</button></div>`).join(""):'<div class="empty">Nessun movimento</div>'}
+function draw(id,arr){let el=document.getElementById(id);if(!el)return;el.innerHTML=arr.length?arr.map(x=>`<div class="tx"><div class="circle">${x.type==="income"?"↑":"↓"}</div><div class="txmain"><b>${esc(x.desc)}</b><small>${esc(x.cat)} · ${new Date(x.date+"T12:00").toLocaleDateString("it-IT")}</small></div><div class="amount ${x.type==="income"?"green":"red"}">${x.type==="income"?"+":"−"}${euro(x.amount)}</div><button class="delete" onclick="del('${x.id}')">×</button></div>`).join(""):'<div class="empty">Nessun movimento</div>'}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function openModal(t){type=t;setType(t);document.getElementById("amount").value="";document.getElementById("desc").value="";document.getElementById("date").value=today();document.getElementById("modal").style.display="flex";setTimeout(()=>document.getElementById("amount").focus(),150)}
 function closeModal(){document.getElementById("modal").style.display="none"}
 function setType(t){type=t;document.getElementById("incBtn").classList.toggle("sel",t==="income");document.getElementById("expBtn").classList.toggle("sel",t==="expense");document.getElementById("cat").value=t==="income"?"Stipendio":"Altro";document.getElementById("modalTitle").textContent=t==="income"?"Nuova entrata":"Nuova spesa"}
-function addTx(){let amount=parseFloat(document.getElementById("amount").value),desc=document.getElementById("desc").value.trim();if(!amount||!desc)return alert("Inserisci importo e descrizione.");db.items.push({id:crypto.randomUUID(),type,amount,desc,cat:document.getElementById("cat").value,date:document.getElementById("date").value});closeModal();save()}
+function num(v){return Number(String(v??"").trim().replace(/\./g,"").replace(",","."))||0}
+function addTx(){let amount=num(document.getElementById("amount").value),desc=document.getElementById("desc").value.trim(),date=document.getElementById("date").value||today();if(amount<=0||!desc)return alert("Inserisci importo e descrizione.");db.items.push({id:crypto.randomUUID(),type,amount,desc,cat:document.getElementById("cat").value,date});closeModal();save()}
 function del(id){db.items=db.items.filter(x=>x.id!==id);save()}
 function saveGoal(){db.goal=parseFloat(document.getElementById("goalInput").value)||0;db.goalName=document.getElementById("goalNameInput").value.trim();save()}
 function saveBase(){db.base=parseFloat(document.getElementById("baseSavings").value)||0;save()}
 function openSub(){document.getElementById("subName").value="";document.getElementById("subAmount").value="";document.getElementById("subDay").value="";document.getElementById("subAuto").checked=false;document.getElementById("subModal").style.display="flex";setTimeout(()=>document.getElementById("subName").focus(),150)}
 function closeSub(){document.getElementById("subModal").style.display="none"}
-function addSub(){let name=document.getElementById("subName").value.trim(),amount=parseFloat(document.getElementById("subAmount").value),day=parseInt(document.getElementById("subDay").value)||1;if(!name||!amount||day<1||day>31)return alert("Inserisci nome, costo e giorno di addebito.");db.subs.push({id:crypto.randomUUID(),name,amount,day,auto:document.getElementById("subAuto").checked,lastApplied:""});closeSub();save()}
+function addSub(){
+ let name=document.getElementById("subName").value.trim(),amount=num(document.getElementById("subAmount").value),day=parseInt(document.getElementById("subDay").value)||1,auto=document.getElementById("subAuto").checked;
+ if(!name||amount<=0||day<1||day>31)return alert("Inserisci nome, costo e giorno di addebito.");
+ const id=crypto.randomUUID(),ym=currentYM();
+ db.subs.push({id,name,amount,day,auto,lastApplied:ym});
+ // L'inserimento dell'abbonamento registra anche la spesa del mese corrente,
+ // così l'importo compare subito sia in Abbonamenti sia in Movimenti.
+ db.items.push({id:crypto.randomUUID(),type:"expense",amount,desc:name+" (abbonamento)",cat:"Abbonamenti",date:today(),recurring:true,subscriptionId:id});
+ closeSub();save();
+}
 function delSub(id){db.subs=db.subs.filter(x=>x.id!==id);save()}
 document.getElementById("subModal").addEventListener("click",e=>{if(e.target.id==="subModal")closeSub()});
 document.querySelectorAll(".navbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".navbtn").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));document.getElementById(b.dataset.page).classList.add("active")});
 document.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-filter]").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");filter=b.dataset.filter;render()});
 document.getElementById("modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal()});
 render();
+showPinLock();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
 </script>
 </body></html>
