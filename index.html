@@ -118,17 +118,17 @@ button.lightbtn{border:0;border-radius:11px;padding:9px 11px;background:#e5e5ea;
 <div class="section" style="margin-top:5px">Salvadanaio</div>
 <div class="card">
  <div class="muted">Saldo nel salvadanaio</div><div style="font-size:34px;font-weight:750;margin:4px 0 18px" id="savingValue">€ 0,00</div>
- <label>Obiettivo</label><input id="goalInput" type="number" min="0" step=".01" placeholder="es. 5000">
+ <label>Obiettivo</label><input id="goalInput" type="text" inputmode="decimal" autocomplete="off" placeholder="es. 5000">
  <label>Nome obiettivo</label><input id="goalNameInput" placeholder="es. Vacanza">
  <button class="primary" onclick="saveGoal()">Salva obiettivo</button>
 </div>
 <div class="card">
  <b>Saldo iniziale</b><p class="muted">Se hai già soldi da parte, inserisci qui l'importo di partenza del salvadanaio.</p>
- <input id="baseSavings" type="number" min="0" step=".01" placeholder="0">
+ <input id="baseSavings" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
  <button class="primary" onclick="saveBase()">Salva saldo iniziale</button>
 </div>
 <div class="card">
- <b>Come funziona</b><p class="muted">Ogni mese l'app calcola automaticamente entrate − uscite. A fine mese puoi trasferire quel bilancio al salvadanaio dalla pagina Mesi. Un bilancio negativo riduce il salvadanaio.</p>
+ <b>Come funziona</b><p class="muted">Il salvadanaio si aggiorna continuamente: ogni entrata e ogni spesa modifica subito il saldo. Il bilancio del mese in corso viene incluso automaticamente; quando il mese termina, viene consolidato nel salvadanaio. Un bilancio negativo lo riduce.</p>
 </div>
 </section>
 </main>
@@ -140,14 +140,14 @@ button.lightbtn{border:0;border-radius:11px;padding:9px 11px;background:#e5e5ea;
 
 <div class="modal" id="subModal"><div class="sheet"><div class="handle"></div><h2>Nuovo abbonamento</h2>
 <label>Nome</label><input id="subName" placeholder="es. Netflix">
-<label>Costo mensile (€)</label><input id="subAmount" type="number" min=".01" step=".01" inputmode="decimal" placeholder="0,00">
+<label>Costo mensile (€)</label><input id="subAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00">
 <label>Giorno dell'addebito</label><input id="subDay" type="number" min="1" max="31" placeholder="es. 15">
 <label style="display:flex;align-items:center;gap:8px;margin-top:14px"><input id="subAuto" type="checkbox" style="width:auto"> Registra automaticamente la spesa ogni mese</label>
 <button class="primary" onclick="addSub()">Salva abbonamento</button><button class="primary" style="background:#e5e5ea;color:#111" onclick="closeSub()">Annulla</button>
 </div></div>
 <div class="modal" id="modal"><div class="sheet"><div class="handle"></div><h2 id="modalTitle">Aggiungi</h2>
 <div class="segment"><button id="incBtn" class="sel" onclick="setType('income')">Entrata</button><button id="expBtn" onclick="setType('expense')">Uscita</button></div>
-<label>Importo</label><input id="amount" type="number" min=".01" step=".01" inputmode="decimal" placeholder="0,00">
+<label>Importo</label><input id="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00">
 <label>Descrizione</label><input id="desc" placeholder="es. Stipendio settembre">
 <label>Categoria</label><select id="cat"><option>Stipendio</option><option>Casa</option><option>Spesa</option><option>Auto</option><option>Svago</option><option>Abbonamenti</option><option>Salute</option><option>Altro</option></select>
 <label>Data</label><input id="date" type="date">
@@ -186,15 +186,40 @@ function monthItems(ym=currentYM()){return db.items.filter(x=>x.date.startsWith(
 function monthTotals(ym){let a=monthItems(ym),inc=a.filter(x=>x.type==="income").reduce((s,x)=>s+x.amount,0),exp=a.filter(x=>x.type==="expense").reduce((s,x)=>s+x.amount,0);return {inc,exp,balance:inc-exp}}
 function monthIsPast(ym){return ym<currentYM()}
 function monthKeys(){let set=new Set(db.items.map(x=>x.date.slice(0,7)));set.add(currentYM());Object.keys(db.closedMonths).forEach(x=>set.add(x));return [...set].sort().reverse()}
+
+/*
+  Aggiornamento continuo del salvadanaio:
+  - il mese corrente viene incluso live nel saldo mostrato;
+  - quando cambia il mese, tutti i mesi precedenti non ancora consolidati
+    vengono trasferiti automaticamente nel campo wallet.
+  In questo modo non serve più premere "Aggiungi al salvadanaio" a fine mese.
+*/
+function consolidatePastMonths(){
+  const ymNow=currentYM();
+  let changed=false;
+  const months=new Set(db.items.map(x=>x.date.slice(0,7)));
+  months.forEach(ym=>{
+    if(ym<ymNow && !db.closedMonths[ym]){
+      const t=monthTotals(ym);
+      db.wallet+=t.balance;
+      db.closedMonths[ym]={balance:t.balance,closedAt:today(),automatic:true};
+      changed=true;
+    }
+  });
+  if(changed)localStorage.setItem(KEY,JSON.stringify(db));
+}
+
 function applyRecurring(){
  const now=new Date(),ym=currentYM();let changed=false;
  db.subs.forEach(x=>{if(x.auto&&x.lastApplied!==ym&&now.getDate()>=Math.min(x.day,28)){db.items.push({id:crypto.randomUUID(),type:"expense",amount:x.amount,desc:x.name+" (abbonamento)",cat:"Abbonamenti",date:today(),recurring:true});x.lastApplied=ym;changed=true}});
  if(changed)localStorage.setItem(KEY,JSON.stringify(db));
 }
 applyRecurring();
+consolidatePastMonths();
 
 function renderWallet(){
- const t=monthTotals(),wallet=db.base+db.wallet;
+ const t=monthTotals();
+ const wallet=db.base+db.wallet+t.balance;
  document.getElementById("walletValue").textContent=euro(wallet);
  document.getElementById("income").textContent=euro(t.inc);document.getElementById("expense").textContent=euro(t.exp);
  const b=document.getElementById("balance");b.textContent=(t.balance>=0?"+":"")+euro(t.balance);b.className=t.balance>=0?"positive":"negative";
@@ -213,7 +238,7 @@ function renderMonths(){
  el.innerHTML=keys.map(ym=>{
    let t=monthTotals(ym),closed=!!db.closedMonths[ym],past=monthIsPast(ym);
    let signed=(t.balance>=0?"+":"−")+euro(Math.abs(t.balance));
-   let action=closed?`<span class="muted">✓ Nel salvadanaio</span>`:past?`<button class="smallbtn" onclick="addMonthToWallet('${ym}')">Aggiungi al salvadanaio</button>`:`<span class="muted">A fine mese</span>`;
+   let action=closed?`<span class="muted">✓ Nel salvadanaio</span>`:`<span class="muted">Aggiornamento automatico</span>`;
    return `<div class="monthcard"><div class="monthhead"><b>${esc(monthLabel(ym))}</b><span class="${t.balance>=0?"positive":"negative"}"><b>${signed}</b></span></div><div class="monthgrid"><div class="mini"><small>Entrate</small><b class="green">${euro(t.inc)}</b></div><div class="mini"><small>Uscite</small><b class="red">${euro(t.exp)}</b></div><div class="mini" style="grid-column:1/-1"><small>Bilancio finale</small><b class="${t.balance>=0?"positive":"negative"}">${signed}</b></div></div><div style="margin-top:12px;text-align:right">${action}</div></div>`;
  }).join("")||'<div class="empty">Nessun mese disponibile.</div>';
 }
@@ -280,11 +305,37 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",
 function openModal(t){type=t;setType(t);document.getElementById("amount").value="";document.getElementById("desc").value="";document.getElementById("date").value=today();document.getElementById("modal").style.display="flex";setTimeout(()=>document.getElementById("amount").focus(),150)}
 function closeModal(){document.getElementById("modal").style.display="none"}
 function setType(t){type=t;document.getElementById("incBtn").classList.toggle("sel",t==="income");document.getElementById("expBtn").classList.toggle("sel",t==="expense");document.getElementById("cat").value=t==="income"?"Stipendio":"Altro";document.getElementById("modalTitle").textContent=t==="income"?"Nuova entrata":"Nuova spesa"}
-function num(v){return Number(String(v??"").trim().replace(/\./g,"").replace(",","."))||0}
+function num(v){
+  let s=String(v??"").trim().replace(/\s|€|EUR/gi,"");
+  if(!s)return 0;
+  const comma=s.lastIndexOf(","), dot=s.lastIndexOf(".");
+  if(comma!==-1 && dot!==-1){
+    // The last separator is the decimal separator: 1.234,56 or 1,234.56
+    if(comma>dot) s=s.replace(/\./g,"").replace(",",".");
+    else s=s.replace(/,/g,"");
+  }else if(comma!==-1){
+    s=s.replace(/\./g,"").replace(",",".");
+  }else if(dot!==-1){
+    // A single dot is a decimal separator (e.g. iOS can turn 9,99 into 9.99).
+    const parts=s.split(".");
+    if(parts.length===2 && parts[1].length<=2) { /* keep decimal dot */ }
+    else s=s.replace(/\./g,"");
+  }
+  const n=Number(s.replace(/[^0-9.-]/g,""));
+  return Number.isFinite(n)?n:0;
+}
+function normalizeMoneyField(el){
+  if(!el)return;
+  const raw=el.value.trim(); if(!raw)return;
+  const n=num(raw); if(n>0) el.value=n.toFixed(2).replace(".",",");
+}
+["amount","subAmount","goalInput","baseSavings"].forEach(id=>{
+  const el=document.getElementById(id); if(el) el.addEventListener("blur",()=>normalizeMoneyField(el));
+});
 function addTx(){let amount=num(document.getElementById("amount").value),desc=document.getElementById("desc").value.trim(),date=document.getElementById("date").value||today();if(amount<=0||!desc)return alert("Inserisci importo e descrizione.");db.items.push({id:crypto.randomUUID(),type,amount,desc,cat:document.getElementById("cat").value,date});closeModal();save()}
 function del(id){db.items=db.items.filter(x=>x.id!==id);save()}
-function saveGoal(){db.goal=parseFloat(document.getElementById("goalInput").value)||0;db.goalName=document.getElementById("goalNameInput").value.trim();save()}
-function saveBase(){db.base=parseFloat(document.getElementById("baseSavings").value)||0;save()}
+function saveGoal(){db.goal=num(document.getElementById("goalInput").value);db.goalName=document.getElementById("goalNameInput").value.trim();save()}
+function saveBase(){db.base=num(document.getElementById("baseSavings").value);save()}
 function openSub(){document.getElementById("subName").value="";document.getElementById("subAmount").value="";document.getElementById("subDay").value="";document.getElementById("subAuto").checked=false;document.getElementById("subModal").style.display="flex";setTimeout(()=>document.getElementById("subName").focus(),150)}
 function closeSub(){document.getElementById("subModal").style.display="none"}
 function addSub(){
